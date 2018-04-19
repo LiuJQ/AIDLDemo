@@ -14,6 +14,7 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.TextView;
 
 import com.jackin.aidldemo.model.MessageModel;
 import com.jackin.aidldemo.remote.RemoteMessageService;
@@ -21,6 +22,9 @@ import com.jackin.aidldemo.remote.RemoteMessageService;
 public class MainActivity extends AppCompatActivity {
 
     private final static String TAG = "MainActivity";
+
+    private TextView mMsgTextView;
+
     private IMessageSender mMessageSender;
     private boolean mRemoteServiceBound;
 
@@ -28,6 +32,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        mMsgTextView = findViewById(R.id.msg);
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
@@ -40,12 +45,14 @@ public class MainActivity extends AppCompatActivity {
                             @Override
                             public void onClick(View v) {
                                 if (mRemoteServiceBound && mMessageSender != null) {
+                                    // 创建消息体
                                     MessageModel msg = new MessageModel();
                                     msg.setMsgTimeStamp(System.currentTimeMillis());
                                     msg.setMsgFrom("Client");
                                     msg.setMsgTo("Service");
                                     msg.setMsgContent("What a good day today !");
                                     try {
+                                        // 使用AIDL接口跨进程发送消息到Service
                                         mMessageSender.sendMessage(msg);
                                     } catch (RemoteException e) {
                                         Log.e(TAG, "send message failed");
@@ -62,12 +69,32 @@ public class MainActivity extends AppCompatActivity {
         bindRemoteService();
     }
 
+    IMessageReceiver mMsgReceiver = new IMessageReceiver.Stub() {
+        @Override
+        public void onMessageReceived(final MessageModel msg) throws RemoteException {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    // 展示服务端推送的消息
+                    mMsgTextView.setText(msg.toString());
+                }
+            });
+        }
+    };
+
     ServiceConnection mRemoteServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             Log.i(TAG, "connected to remote service");
             mRemoteServiceBound = true;
+            // 通过编译器自动生成的IMessageSender.java源码Stub内部类，转换得到AIDL定义的接口
             mMessageSender = IMessageSender.Stub.asInterface(service);
+            try {
+                // 注册消息接收回调接口
+                mMessageSender.registerMessageReceiver(mMsgReceiver);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
         }
 
         @Override
@@ -80,6 +107,8 @@ public class MainActivity extends AppCompatActivity {
     private void bindRemoteService() {
         Intent intent = new Intent(this, RemoteMessageService.class);
         bindService(intent, mRemoteServiceConnection, BIND_AUTO_CREATE);
+        // 实现UI进程退出后依然接收服务器推送的消息
+        startService(intent);
     }
 
     @Override
@@ -110,6 +139,14 @@ public class MainActivity extends AppCompatActivity {
         if (mRemoteServiceBound) {
             unbindService(mRemoteServiceConnection);
             mRemoteServiceBound = false;
+        }
+        // 反注册接收消息回调接口
+        if (mMessageSender != null && mMessageSender.asBinder().isBinderAlive()) {
+            try {
+                mMessageSender.unRegisterMessageReceiver(mMsgReceiver);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
         }
     }
 }
